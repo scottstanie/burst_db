@@ -17,6 +17,7 @@ cd burst_db
 
 ```bash
 conda env create
+conda activate burst-db-env
 ```
 
 3. Install via pip:
@@ -68,7 +69,7 @@ git tag v0.12.0
 pip install -e .
 
 # Setup in a new folder
-mkdir -p test_012 && cd test_012
+mkdir -p test_014 && cd test_014
 # Copy last CMR survey of CSLC products
 cp ../test_011/cmr_survey.2016-07-01_to_2024-12-31.2025-06-12.opera-pcm-3.1.6.csv.tar.gz .
 # OR: if updating, get the new survey from SDS
