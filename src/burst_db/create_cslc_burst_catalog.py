@@ -60,18 +60,20 @@ def create_burst_catalog(input_csv: Path, opera_db: Path, output_file: Path):
     """
     logging.info("Creating table from CMR raw bursts...")
     with duckdb.connect(str(output_file)) as conn:
+        # Ensure bare timestamp strings from CSV are interpreted as UTC,
+        # not the machine's local timezone.
+        conn.sql("SET TimeZone = 'UTC'")
         # Note: we need to add the `FIRST` because CMR has duplicates.
         # the csv has an odd header with a #
         # the "revision time" is sort of like "PGE Processing time"
         # The "Temporal Time" is the acquisition sensing time in the S1 filename
-        conn.sql(
-            f"""
+        conn.sql(f"""
     CREATE TABLE bursts AS
     SELECT
-        LOWER(REPLACE(substring("# Granule ID", 18, 15), '-', '_')) AS burst_id_jpl,
-        "Temporal Time"::TIMESTAMP AS sensing_time,
-        MAX("Revision Time"::TIMESTAMP) AS max_revision_time,
-        FIRST("# Granule ID") AS granule_id,
+        LOWER(REPLACE(substring("Granule ID", 18, 15), '-', '_')) AS burst_id_jpl,
+        "Temporal Time"::TIMESTAMPTZ AS sensing_time,
+        MAX("Revision Time"::TIMESTAMPTZ) AS max_revision_time,
+        FIRST("Granule ID") AS granule_id,
         granule_id[72:73] AS pol,
         FIRST("Revision-Temporal Delta Hours") AS delta_hours,
         FIRST("revision-id") AS revision_id
@@ -80,8 +82,7 @@ def create_burst_catalog(input_csv: Path, opera_db: Path, output_file: Path):
         1, 2
     ORDER BY
         1, 2
-    """
-        )
+    """)
 
         conn.sql(f"ATTACH '{opera_db}' AS opera")
 
@@ -89,8 +90,7 @@ def create_burst_catalog(input_csv: Path, opera_db: Path, output_file: Path):
             "Joining to OPERA Frame/Burst database Creating table from CMR raw"
             " bursts..."
         )
-        conn.sql(
-            """
+        conn.sql("""
     CREATE TABLE bursts_with_frame_ids AS
     SELECT
         b.burst_id_jpl,
@@ -103,8 +103,7 @@ def create_burst_catalog(input_csv: Path, opera_db: Path, output_file: Path):
     JOIN opera.frames_bursts fb ON fb.burst_ogc_fid = bm.OGC_FID
     JOIN opera.frames f ON fb.frame_fid = f.fid
     WHERE pol = 'VV'
-    """
-        )
+    """)
 
 
 def fetch_bursts(db_file: Path | str):
@@ -121,6 +120,10 @@ def fetch_bursts(db_file: Path | str):
         DataFrame containing the fetched bursts.
 
     """
+    # Convert Python lists to SQL tuple strings
+    australian_frames = str(tuple(AUSTRALIAN_SAMPLE_FRAMES))
+    edge_frames = str(tuple(EDGE_FRAMES_TO_IGNORE))
+
     query = f"""
     SELECT
       frame_id,
@@ -130,15 +133,22 @@ def fetch_bursts(db_file: Path | str):
       bursts_with_frame_ids
     WHERE
       (burst_is_north_america
-      OR frame_id in {AUSTRALIAN_SAMPLE_FRAMES})
-      AND frame_id not in {EDGE_FRAMES_TO_IGNORE}
+      OR frame_id in {australian_frames})
+      AND frame_id not in {edge_frames}
     ORDER BY
       frame_id,
       burst_id_jpl,
       sensing_time
     """
     with duckdb.connect(str(db_file)) as conn:
+        conn.sql("SET TimeZone = 'UTC'")
         df_out = conn.sql(query).df()
+
+    # Convert to UTC and remove timezone info (keep as naive UTC)
+    if df_out["sensing_time"].dt.tz is not None:
+        df_out["sensing_time"] = (
+            df_out["sensing_time"].dt.tz_convert("UTC").dt.tz_localize(None)
+        )
 
     df_out["sensing_date"] = df_out["sensing_time"].dt.date
     return df_out
